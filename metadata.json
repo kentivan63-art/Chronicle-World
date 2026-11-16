@@ -1,0 +1,6 @@
+{
+  "name": "Chronicle World",
+  "description": "A 2D pixel-tile god-simulator where you guide autonomous humans through blueprints, innate talents, and behavior nudges from the Stone Age to the Clockwork Era.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

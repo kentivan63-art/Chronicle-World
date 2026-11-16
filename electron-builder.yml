@@ -1,0 +1,33 @@
+appId: com.chronicleworld.desktop
+productName: Chronicle World
+copyright: Chronicle World Prototype
+directories:
+  output: release
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: ChronicleWorld-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+mac:
+  category: public.app-category.simulation-games
+  target:
+    - dmg
+    - zip
+linux:
+  category: Game
+  target:
+    - AppImage
+    - deb
