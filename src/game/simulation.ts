@@ -361,6 +361,8 @@ export function awakenHumanTalent(
   }
   h.talents.push(talent);
   h.curiosity = Math.min(100, h.curiosity + 25);
+  h.iq = Math.min(155, h.iq + (talent === 'SCHOLAR' || talent === 'CLOCKMAKER' ? 5 : 3));
+  h.leadershipPoints += talent === 'CIVIC_LEADER' ? 12 : 4;
   const def = TALENT_DEFS[talent];
   h.thoughtText = `Awakened ${def.shortTag}!`;
   h.thoughtTimer = 4;
@@ -372,6 +374,93 @@ export function awakenHumanTalent(
     addChronicle(world, `${h.name} awakened innate ${def.name} talent.`, 'TALENT');
   }
   return true;
+}
+
+export interface ChiefScoreBreakdown {
+  total: number;
+  leadership: number;
+  contribution: number;
+  talents: number;
+  iq: number;
+}
+
+export function evaluateChiefCandidate(h: HumanAgent): ChiefScoreBreakdown {
+  const leadership = Math.round(
+    (h.talents.includes('CIVIC_LEADER') ? 40 : 0) +
+      h.leadershipPoints * 2.5 +
+      Math.max(0, h.age - 15) * 0.6 +
+      (h.equippedWeapon ? 6 : 0)
+  );
+  const contribution = Math.round(
+    h.buildingsAssisted * 12 +
+      h.craftedCount * 10 +
+      h.researchContributed * 1.6 +
+      h.discoveries.length * 14
+  );
+  let talentVal = 0;
+  for (const tid of h.talents) {
+    if (tid === 'CIVIC_LEADER') talentVal += 26;
+    else if (tid === 'CLOCKMAKER') talentVal += 22;
+    else if (tid === 'ARCHITECT' || tid === 'SCHOLAR') talentVal += 20;
+    else talentVal += 17;
+  }
+  const talents = talentVal + h.talents.length * 4;
+  const iq = Math.round(Math.max(0, h.iq - 80) * 1.15);
+
+  return {
+    total: leadership + contribution + talents + iq,
+    leadership,
+    contribution,
+    talents,
+    iq,
+  };
+}
+
+export function updateVillageChiefs(world: WorldState, announce = true): void {
+  if (world.settlements.length === 0 || world.humans.length === 0) return;
+
+  for (const s of world.settlements) {
+    let candidates = world.humans.filter((h) => h.settlementId === s.id);
+    if (candidates.length === 0 && world.settlements.length === 1) {
+      candidates = world.humans;
+    }
+    if (candidates.length === 0) {
+      s.chiefHumanId = null;
+      continue;
+    }
+
+    const incumbent = s.chiefHumanId
+      ? candidates.find((h) => h.id === s.chiefHumanId) ?? null
+      : null;
+
+    let best = candidates[0];
+    let bestScore = -Infinity;
+    for (const c of candidates) {
+      const score =
+        evaluateChiefCandidate(c).total + (incumbent && c.id === incumbent.id ? 10 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+
+    if (s.chiefHumanId !== best.id) {
+      const hadPrevious = Boolean(incumbent);
+      s.chiefHumanId = best.id;
+      if (announce) {
+        best.thoughtText = `Named Village Chief of ${s.name}!`;
+        best.thoughtTimer = 4.2;
+        spawnParticle(world, best.x, best.y - 0.85, '#fde047', `Chief ${best.name}!`, -0.55);
+        addChronicle(
+          world,
+          hadPrevious
+            ? `${best.name} was chosen as the new Village Chief of ${s.name} (IQ ${best.iq}).`
+            : `${best.name} became Village Chief of ${s.name} (IQ ${best.iq}).`,
+          'COMMUNITY'
+        );
+      }
+    }
+  }
 }
 
 export function bestowTalentBrush(
@@ -1152,6 +1241,8 @@ function completeExplorerDiscovery(world: WorldState, h: HumanAgent): void {
 
   h.isCuriousExplorer = false;
   h.curiosity = Math.min(100, h.curiosity + 12);
+  h.iq = Math.min(155, h.iq + 2);
+  h.leadershipPoints += 4;
   h.researchContributed += 5;
   h.thoughtText = `Found ${discovery.title}!`;
   h.thoughtTimer = 4.2;
@@ -1327,16 +1418,43 @@ function getDeliveredRatio(site: {
   return Math.min(1, totalDel / totalReq);
 }
 
+const stuckTrackers = new WeakMap<
+  HumanAgent,
+  { anchorX: number; anchorY: number; elapsed: number }
+>();
+
+function isPassableMoveCoord(
+  world: WorldState,
+  px: number,
+  py: number,
+  allowShallowWater: boolean,
+  allowDeepWater: boolean
+): boolean {
+  if (px < 1.05 || py < 1.05 || px > world.width - 1.05 || py > world.height - 1.05) {
+    return false;
+  }
+  const tx = Math.floor(px);
+  const ty = Math.floor(py);
+  const tile = world.tiles[ty * world.width + tx];
+  if (!tile) return false;
+  if (tile.type === TileType.DEEP_WATER) return allowDeepWater;
+  if (tile.type === TileType.SHALLOW_WATER) return allowShallowWater || allowDeepWater;
+  return true;
+}
+
 function moveToward(
   world: WorldState,
-  entity: { x: number; y: number; facing: 1 | -1; vx?: number; vy?: number },
+  entity: { id?: string; x: number; y: number; facing: 1 | -1; vx?: number; vy?: number },
   tx: number,
   ty: number,
   speed: number,
-  dt: number
+  dt: number,
+  allowWater = false
 ): boolean {
-  const dx = tx - entity.x;
-  const dy = ty - entity.y;
+  const targetX = Math.max(1.05, Math.min(world.width - 1.05, tx));
+  const targetY = Math.max(1.05, Math.min(world.height - 1.05, ty));
+  const dx = targetX - entity.x;
+  const dy = targetY - entity.y;
   const dist = Math.hypot(dx, dy);
   if (dist < 0.16) {
     entity.vx = 0;
@@ -1346,30 +1464,81 @@ function moveToward(
 
   const prevX = entity.x;
   const prevY = entity.y;
-  const step = Math.min(dist, speed * dt);
-  const nx = entity.x + (dx / dist) * step;
-  const ny = entity.y + (dy / dist) * step;
-  if (Math.abs(dx) > 0.02) entity.facing = dx >= 0 ? 1 : -1;
+  const baseAngle = Math.atan2(dy, dx);
+  const turnSign = entity.id && getHumanSlotNumber(entity.id) % 2 === 0 ? 1 : -1;
+  const steerOffsets = [
+    0,
+    0.42 * turnSign,
+    -0.42 * turnSign,
+    0.85 * turnSign,
+    -0.85 * turnSign,
+    1.28 * turnSign,
+    -1.28 * turnSign,
+    1.72 * turnSign,
+    -1.72 * turnSign,
+  ];
 
-  const tileIdx = Math.floor(ny) * world.width + Math.floor(nx);
-  const nextTile = world.tiles[tileIdx];
+  let chosenX = entity.x;
+  let chosenY = entity.y;
+  let moved = false;
+  const baseStep = Math.min(dist, speed * dt);
 
-  if (nextTile && !isWaterTile(nextTile.type)) {
-    entity.x = Math.max(1, Math.min(world.width - 2, nx));
-    entity.y = Math.max(1, Math.min(world.height - 2, ny));
-  } else {
-    // Try sliding horizontally or vertically around coastline
-    const tryX = world.tiles[Math.floor(entity.y) * world.width + Math.floor(nx)];
-    const tryY = world.tiles[Math.floor(ny) * world.width + Math.floor(entity.x)];
-    if (tryX && !isWaterTile(tryX.type)) {
-      entity.x = nx;
-    } else if (tryY && !isWaterTile(tryY.type)) {
-      entity.y = ny;
-    } else {
-      // Nudge away from water toward center
-      entity.x += (world.width / 2 - entity.x > 0 ? 1 : -1) * step * 0.6;
-      entity.y += (world.height / 2 - entity.y > 0 ? 1 : -1) * step * 0.6;
+  // 1. Prefer steering smoothly on dry land without wobbling into water/map edges
+  for (const offset of steerOffsets) {
+    const angle = baseAngle + offset;
+    const step = offset === 0 ? baseStep : baseStep * 0.92;
+    const nx = entity.x + Math.cos(angle) * step;
+    const ny = entity.y + Math.sin(angle) * step;
+    const lookDist = Math.min(dist, Math.max(step, 0.36));
+    const lx = entity.x + Math.cos(angle) * lookDist;
+    const ly = entity.y + Math.sin(angle) * lookDist;
+
+    if (
+      isPassableMoveCoord(world, nx, ny, false, false) &&
+      (offset === 0 || isPassableMoveCoord(world, lx, ly, false, false))
+    ) {
+      chosenX = nx;
+      chosenY = ny;
+      moved = true;
+      break;
     }
+  }
+
+  // 2. If dry land is blocked (or entity starts on water), allow shallow fording or deep ferry for caravans/explorers
+  if (!moved) {
+    const curTile = world.tiles[Math.floor(entity.y) * world.width + Math.floor(entity.x)];
+    const onWaterNow = curTile ? isWaterTile(curTile.type) : false;
+
+    if (allowWater || onWaterNow) {
+      for (const passDeep of allowWater ? [false, true] : [false]) {
+        for (const offset of steerOffsets.slice(0, 7)) {
+          const angle = baseAngle + offset;
+          const fordMult = passDeep ? 0.48 : 0.62;
+          const step = Math.min(dist, speed * fordMult * dt);
+          const nx = entity.x + Math.cos(angle) * step;
+          const ny = entity.y + Math.sin(angle) * step;
+          if (isPassableMoveCoord(world, nx, ny, true, passDeep || onWaterNow)) {
+            chosenX = nx;
+            chosenY = ny;
+            moved = true;
+            break;
+          }
+        }
+        if (moved) break;
+      }
+    }
+  }
+
+  if (moved) {
+    entity.x = Math.max(1.05, Math.min(world.width - 1.05, chosenX));
+    entity.y = Math.max(1.05, Math.min(world.height - 1.05, chosenY));
+  }
+
+  const moveDx = entity.x - prevX;
+  if (Math.abs(moveDx) > 0.01) {
+    entity.facing = moveDx >= 0 ? 1 : -1;
+  } else if (Math.abs(dx) > 0.08 && !moved) {
+    entity.facing = dx >= 0 ? 1 : -1;
   }
 
   const invDt = dt > 0.0001 ? 1 / dt : 0;
@@ -1440,9 +1609,16 @@ function completeBuilding(world: WorldState, b: BuildingSite): void {
       centerX: cx,
       centerY: cy,
       hubBuildingId: b.id,
+      chiefHumanId: null,
       primaryExport: inferred.exportRes,
       primaryImport: inferred.importRes,
     });
+    for (const u of world.humans) {
+      if (Math.hypot(u.x - cx, u.y - cy) <= 18 && !u.settlementId) {
+        u.settlementId = newId;
+      }
+    }
+    updateVillageChiefs(world, true);
     if (world.settlements.length >= 2) {
       const mainS = world.settlements[0];
       world.tradeRoutes.push({
@@ -1793,58 +1969,135 @@ function considerAutonomousVillageBuilding(world: WorldState): void {
   }
 }
 
-function considerAutonomousCrafting(world: WorldState): void {
-  if (world.craftOrders.length >= 2 || world.humans.length === 0) return;
+function hasStationResourceAccess(
+  world: WorldState,
+  station: BuildingSite,
+  res: 'wood' | 'stone' | 'ore' | 'coal',
+  unitCost: number
+): boolean {
+  if (unitCost <= 0) return true;
+  if (world.stockpile[res] >= Math.max(1, Math.floor(unitCost * 0.45))) return true;
+  const targetTileType =
+    res === 'wood'
+      ? TileType.FOREST
+      : res === 'stone'
+        ? TileType.STONE
+        : res === 'ore'
+          ? TileType.ORE
+          : TileType.COAL;
+  const cx = Math.floor(station.tileX + station.size / 2);
+  const cy = Math.floor(station.tileY + station.size / 2);
+  const radius = 26;
+  const minX = Math.max(1, cx - radius);
+  const maxX = Math.min(world.width - 2, cx + radius);
+  const minY = Math.max(1, cy - radius);
+  const maxY = Math.min(world.height - 2, cy + radius);
 
-  const completedStations = world.buildings.filter((b) => b.status === 'COMPLETE');
+  for (let ty = minY; ty <= maxY; ty++) {
+    for (let tx = minX; tx <= maxX; tx++) {
+      const t = world.tiles[ty * world.width + tx];
+      if (t && t.type === targetTileType && t.resourceAmount > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function findCraftOrderForHuman(world: WorldState, h: HumanAgent): CraftOrder | null {
+  let bestOrder: CraftOrder | null = null;
+  let bestScore = Infinity;
+
+  for (const order of world.craftOrders) {
+    const station = world.buildings.find((b) => b.id === order.buildingId && b.status === 'COMPLETE');
+    if (!station) continue;
+    const cx = station.tileX + station.size / 2;
+    const cy = station.tileY + station.size / 2;
+    const d = Math.hypot(cx - h.x, cy - h.y);
+    const sameSettlementBonus =
+      h.settlementId && station.settlementId === h.settlementId ? -18 : 0;
+    const score = d + sameSettlementBonus;
+    if (d <= 48 || world.settlements.length <= 1) {
+      if (score < bestScore) {
+        bestScore = score;
+        bestOrder = order;
+      }
+    }
+  }
+  return bestOrder;
+}
+
+function considerAutonomousCrafting(world: WorldState): void {
+  const maxOrders = Math.max(2, world.settlements.length + 1);
+  if (world.craftOrders.length >= maxOrders || world.humans.length === 0) return;
+
+  const busyStationIds = new Set(world.craftOrders.map((o) => o.buildingId));
+  const completedStations = world.buildings.filter(
+    (b) => b.status === 'COMPLETE' && !busyStationIds.has(b.id)
+  );
   if (completedStations.length === 0) return;
 
   const unarmedCount = world.humans.filter((h) => !h.equippedWeapon).length;
   const untooledCount = world.humans.filter((h) => !h.equippedTool).length;
 
-  // Pick era-matched crafted items whose crafting building is built
-  const itemPriority: CraftedItemKind[] = [
-    'CLOCKWORK_HALBERD',
-    'PRECISION_WRENCH',
-    'BRASS_ASTROLABE',
-    'BRONZE_SWORD',
-    'ARTISAN_HAMMER',
-    'BRONZE_SHIELD',
-    'COPPER_PICKAXE',
-    'TIMBER_BOW',
-    'STONE_AXE',
-    'FLINT_SPEAR',
-    'WOVEN_BASKET',
-  ];
+  // Pick era-matched crafted items whose crafting station is built & free, balancing tools vs weapons
+  const itemPriority: CraftedItemKind[] =
+    untooledCount >= unarmedCount
+      ? [
+          'PRECISION_WRENCH',
+          'CLOCKWORK_HALBERD',
+          'BRASS_ASTROLABE',
+          'ARTISAN_HAMMER',
+          'BRONZE_SWORD',
+          'COPPER_PICKAXE',
+          'TIMBER_BOW',
+          'BRONZE_SHIELD',
+          'STONE_AXE',
+          'WOVEN_BASKET',
+          'FLINT_SPEAR',
+        ]
+      : [
+          'CLOCKWORK_HALBERD',
+          'PRECISION_WRENCH',
+          'BRASS_ASTROLABE',
+          'BRONZE_SWORD',
+          'ARTISAN_HAMMER',
+          'BRONZE_SHIELD',
+          'TIMBER_BOW',
+          'COPPER_PICKAXE',
+          'FLINT_SPEAR',
+          'STONE_AXE',
+          'WOVEN_BASKET',
+        ];
 
-  for (const kind of itemPriority) {
-    const def = CRAFTED_ITEM_DEFS[kind];
-    if (def.era > world.currentEra) continue;
-    if (def.role === 'WEAPON' && unarmedCount === 0 && world.armory[kind] >= 2) continue;
-    if (def.role !== 'WEAPON' && untooledCount === 0 && world.armory[kind] >= 2) continue;
+  for (const station of completedStations) {
+    for (const kind of itemPriority) {
+      const def = CRAFTED_ITEM_DEFS[kind];
+      if (def.era > world.currentEra) continue;
+      if (!def.craftedAt.includes(station.kind)) continue;
+      if (def.role === 'WEAPON' && unarmedCount === 0 && world.armory[kind] >= 2) continue;
+      if (def.role !== 'WEAPON' && untooledCount === 0 && world.armory[kind] >= 2) continue;
 
-    const station = completedStations.find((b) => def.craftedAt.includes(b.kind));
-    if (!station) continue;
+      const hasWood = hasStationResourceAccess(world, station, 'wood', def.unitCost.wood);
+      const hasStone = hasStationResourceAccess(world, station, 'stone', def.unitCost.stone);
+      const hasOre = hasStationResourceAccess(world, station, 'ore', def.unitCost.ore);
+      const hasCoal = hasStationResourceAccess(world, station, 'coal', def.unitCost.coal);
+      if (!hasWood || !hasStone || !hasOre || !hasCoal) continue;
 
-    // Scale desired production batch (1..3) by settlement need & stockpiles
-    const needed = def.role === 'WEAPON' ? Math.max(1, unarmedCount) : Math.max(1, untooledCount);
-    const maxAffordable = Math.max(
-      1,
-      Math.min(
-        3,
-        needed,
-        def.unitCost.ore > 0 ? Math.floor((world.stockpile.ore + 8) / def.unitCost.ore) : 3,
-        def.unitCost.coal > 0 ? Math.floor((world.stockpile.coal + 6) / def.unitCost.coal) : 3
-      )
-    );
+      const needed = def.role === 'WEAPON' ? Math.max(1, unarmedCount) : Math.max(1, untooledCount);
+      const maxAffordable = Math.max(
+        1,
+        Math.min(
+          3,
+          needed,
+          def.unitCost.ore > 0 ? Math.max(1, Math.floor((world.stockpile.ore + 8) / def.unitCost.ore)) : 3,
+          def.unitCost.coal > 0 ? Math.max(1, Math.floor((world.stockpile.coal + 6) / def.unitCost.coal)) : 3
+        )
+      );
 
-    const hasStarter =
-      world.stockpile.wood >= Math.floor(def.unitCost.wood * 0.5) &&
-      world.stockpile.stone >= Math.floor(def.unitCost.stone * 0.4);
-    if (!hasStarter) continue;
-
-    createCraftOrder(world, station.id, kind, maxAffordable);
-    return;
+      createCraftOrder(world, station.id, kind, maxAffordable);
+      return;
+    }
   }
 }
 
@@ -1992,6 +2245,7 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
   const dt = Math.min(0.05, rawDt) * speed;
   const bonuses = getCommunityBonuses(world);
 
+  const prevTickBucket = Math.floor(world.tick / 12);
   // Comfortable pacing: 1 year = 90s at 1x speed, 1 full day/night cycle ~3.7 min at 1x speed
   world.tick += dt * 4;
   world.timeOfDay = (world.timeOfDay + dt * 0.0045) % 1;
@@ -2000,6 +2254,10 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
   stepWeather(world, dt);
   stepMapCurios(world, dt);
   stepSeasonalResourceRespawn(world);
+
+  if (Math.floor(world.tick / 12) > prevTickBucket) {
+    updateVillageChiefs(world, true);
+  }
 
   const nextYear = 1 + Math.floor(world.tick / 360);
   if (nextYear > world.year) {
@@ -2031,7 +2289,7 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
   if (!nightNow && Math.random() < dt * 0.35) {
     considerAutonomousVillageBuilding(world);
   }
-  if (!nightNow && Math.random() < dt * 0.22) {
+  if (!nightNow && Math.random() < dt * 0.55) {
     considerAutonomousCrafting(world);
   }
 
@@ -2163,9 +2421,11 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
     launchCuriousExplorer(world, occupiedTiles);
   }
 
-  const civicLeaders = world.humans.filter((h) => h.talents.includes('CIVIC_LEADER'));
-  const activeCraftOrder = world.craftOrders.find((o) =>
-    world.buildings.some((b) => b.id === o.buildingId && b.status === 'COMPLETE')
+  const chiefIds = new Set(
+    world.settlements.map((s) => s.chiefHumanId).filter(Boolean) as string[]
+  );
+  const civicLeaders = world.humans.filter(
+    (h) => h.talents.includes('CIVIC_LEADER') || chiefIds.has(h.id)
   );
 
   for (const h of world.humans) {
@@ -2196,8 +2456,12 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
 
     let leaderBoost = 1;
     for (const leader of civicLeaders) {
-      if (leader.id !== h.id && Math.hypot(leader.x - h.x, leader.y - h.y) < 5) {
-        leaderBoost = 1.25;
+      const auraRange = chiefIds.has(leader.id) ? 7 : 5;
+      if (leader.id !== h.id && Math.hypot(leader.x - h.x, leader.y - h.y) < auraRange) {
+        leaderBoost = leader.talents.includes('CIVIC_LEADER') ? 1.25 : 1.15;
+        if (!nightNow && h.state !== 'SLEEPING') {
+          leader.leadershipPoints += dt * 0.08;
+        }
         break;
       }
     }
@@ -2255,16 +2519,23 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
 
     const homeBuilding = ensureHumanHome(world, h);
 
-    // Villagers feel weather changes (storms, rain, snow) and shelter inside their respective homes
-    const needsWeatherShelter =
-      !nightNow &&
-      !hasWorkNudge &&
-      h.state !== 'TRADE' &&
-      (localWeather.type === 'STORM' ||
-        ((localWeather.type === 'RAIN' || localWeather.type === 'SNOW') &&
-          (h.energy < 74 || h.state === 'IDLE' || h.state === 'REST' || h.state === 'SOCIALIZE')));
+    // Villagers stay outdoors during regular rain so daily life continues naturally,
+    // seeking shelter inside homes only during severe rain/thunderstorms (STORM) or freezing exhaustion.
+    const isSevereWeather =
+      localWeather.type === 'STORM' || (localWeather.type === 'SNOW' && h.energy < 25);
 
-    const shouldSeekShelter = (nightNow || needsWeatherShelter) && !hasWorkNudge;
+    const needsWeatherShelter =
+      !nightNow && !hasWorkNudge && h.state !== 'TRADE' && isSevereWeather;
+
+    if (needsWeatherShelter && h.state === 'SLEEPING') {
+      h.actionTimer = Math.max(h.actionTimer, 2.2);
+    }
+
+    const shouldSeekShelter =
+      !hasWorkNudge &&
+      (nightNow ||
+        needsWeatherShelter ||
+        (h.state === 'SLEEPING' && h.actionTimer > 0));
 
     if (h.state === 'SLEEPING' && !shouldSeekShelter) {
       if (h.sleepingInBuildingId) {
@@ -2306,6 +2577,7 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
       const shelter = findAvailableShelter(world, h.x, h.y, shelterClaims, h.homeBuildingId);
       h.state = 'SLEEPING';
       h.sleepingInBuildingId = null;
+      h.actionTimer = nightNow ? 0 : 4.5;
       if (shelter) {
         shelterClaims.set(shelter.id, (shelterClaims.get(shelter.id) ?? 0) + 1);
         h.targetBuildingId = shelter.id;
@@ -2314,7 +2586,11 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
           y: shelter.tileY + shelter.size * 0.72,
         };
         const weatherReason =
-          localWeather.type !== 'CLEAR' ? localWeather.type.toLowerCase() : 'night';
+          localWeather.type === 'STORM'
+            ? 'severe storm'
+            : localWeather.type !== 'CLEAR'
+              ? localWeather.type.toLowerCase()
+              : 'night';
         h.thoughtText = `Sheltering from ${weatherReason} at ${BUILDING_DEFS[shelter.kind].name}`;
       } else {
         h.targetBuildingId = null;
@@ -2350,9 +2626,15 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
       if (h.isCuriousExplorer) {
         launchCuriousExplorer(world, occupiedTiles, h);
       } else {
+        let localCraftOrder = findCraftOrderForHuman(world, h);
+        if (!localCraftOrder && (!h.equippedTool || !h.equippedWeapon)) {
+          considerAutonomousCrafting(world);
+          localCraftOrder = findCraftOrderForHuman(world, h);
+        }
+
         const incompleteSite = findIncompleteBuilding(world, h.x, h.y);
         const missingBuildRes = incompleteSite ? getMissingMaterial(incompleteSite) : null;
-        const missingCraftRes = activeCraftOrder ? getCraftOrderMissingForNextUnit(activeCraftOrder) : null;
+        const missingCraftRes = localCraftOrder ? getCraftOrderMissingForNextUnit(localCraftOrder) : null;
         const urgentMissing = missingBuildRes ?? missingCraftRes;
 
         const connectedRoute =
@@ -2389,14 +2671,15 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
               (nudgeType === 'COMMUNITY_RALLY' ? 60 : 0)
             : 0;
         let scoreCraft =
-          activeCraftOrder
-            ? 42 +
+          localCraftOrder
+            ? 48 +
+              (!h.equippedTool || !h.equippedWeapon ? 14 : 0) +
               (isMetallurgist ? 34 : 0) +
               (isClockmaker ? 28 : 0) +
               (nudgeType === 'COMMUNITY_RALLY' ? 40 : 0)
             : 0;
         const scorePatrol =
-          h.equippedWeapon && !incompleteSite && !activeCraftOrder && h.energy > 40 ? 28 : 0;
+          h.equippedWeapon && !incompleteSite && !localCraftOrder && h.energy > 40 ? 28 : 0;
         let scoreResearch =
           23 +
           (isScholar ? 52 : 0) +
@@ -2550,20 +2833,20 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
           h.actionTimer = 5.5;
           h.thoughtText = `Patrolling (${CRAFTED_ITEM_DEFS[h.equippedWeapon].name})`;
           h.thoughtTimer = 3.2;
-        } else if (best === scoreCraft && activeCraftOrder) {
-          const forge = world.buildings.find((b) => b.id === activeCraftOrder.buildingId && b.status === 'COMPLETE');
-          const cDef = CRAFTED_ITEM_DEFS[activeCraftOrder.itemKind];
-          const neededNext = getCraftOrderMissingForNextUnit(activeCraftOrder);
+        } else if (best === scoreCraft && localCraftOrder) {
+          const forge = world.buildings.find((b) => b.id === localCraftOrder.buildingId && b.status === 'COMPLETE');
+          const cDef = CRAFTED_ITEM_DEFS[localCraftOrder.itemKind];
+          const neededNext = getCraftOrderMissingForNextUnit(localCraftOrder);
           const neededAny = getMissingMaterial({
-            required: activeCraftOrder.requiredTotal,
-            delivered: activeCraftOrder.delivered,
+            required: localCraftOrder.requiredTotal,
+            delivered: localCraftOrder.delivered,
           });
           const resToHaul = neededNext ?? neededAny;
 
           if (forge && resToHaul && world.stockpile[resToHaul] > 0) {
             const take = Math.min(
               4,
-              activeCraftOrder.requiredTotal[resToHaul] - activeCraftOrder.delivered[resToHaul],
+              localCraftOrder.requiredTotal[resToHaul] - localCraftOrder.delivered[resToHaul],
               world.stockpile[resToHaul]
             );
             if (take > 0) {
@@ -2879,7 +3162,7 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
         h.tradeState = null;
         h.state = 'IDLE';
       } else {
-        const arrived = moveToward(world, h, h.targetTile.x, h.targetTile.y, moveSpeed * 1.12, dt);
+        const arrived = moveToward(world, h, h.targetTile.x, h.targetTile.y, moveSpeed * 1.12, dt, true);
         if (!arrived) {
           h.walkPhase += dt * 11;
         } else if (h.tradeState.phase === 'TO_DEST') {
@@ -2918,6 +3201,7 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
           }
           world.stockpile.researchPoints += 2;
           route.completedTrips++;
+          h.leadershipPoints += 5;
           h.carrying = null;
           h.tradeState = null;
           h.state = 'IDLE';
@@ -2958,7 +3242,7 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
         h.isCuriousExplorer = false;
         h.state = 'IDLE';
       } else {
-        const arrived = moveToward(world, h, h.targetTile.x, h.targetTile.y, moveSpeed * 1.08, dt);
+        const arrived = moveToward(world, h, h.targetTile.x, h.targetTile.y, moveSpeed * 1.08, dt, true);
         if (!arrived) {
           h.walkPhase += dt * 11;
         } else {
@@ -3006,7 +3290,10 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
       }
       h.energy = Math.min(100, h.energy + dt * 6);
     } else if (h.state === 'CRAFT') {
-      const order = activeCraftOrder;
+      const order =
+        (h.targetBuildingId
+          ? world.craftOrders.find((o) => o.buildingId === h.targetBuildingId)
+          : undefined) ?? findCraftOrderForHuman(world, h);
       const forge = order
         ? world.buildings.find((b) => b.id === order.buildingId && b.status === 'COMPLETE')
         : null;
@@ -3076,6 +3363,8 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
                 order.completedQty++;
                 order.progress = 0;
                 h.craftedCount++;
+                h.leadershipPoints += 2;
+                if (h.craftedCount % 2 === 0) h.iq = Math.min(155, h.iq + 1);
                 soundEngine.playForgeCraft();
                 const msg = equipCraftedItemToVillage(world, h, order.itemKind);
                 spawnParticle(world, forge.tileX + forge.size / 2, forge.tileY, '#fde047', `${cDef.name}!`, -0.6);
@@ -3183,6 +3472,8 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
             }
             if (site.buildProgress >= 99.8 && getDeliveredRatio(site) >= 1) {
               h.buildingsAssisted++;
+              h.leadershipPoints += 4;
+              h.iq = Math.min(155, h.iq + 1);
               completeBuilding(world, site);
               h.state = 'IDLE';
             }
@@ -3220,8 +3511,12 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
             (nudgeType === 'CURIOSITY_SPARK' ? 2.1 : 1) *
             leaderBoost;
           const gained = rpRate * dt;
+          const prevIqMilestone = Math.floor(h.researchContributed / 12);
           world.stockpile.researchPoints += gained;
           h.researchContributed += gained;
+          if (Math.floor(h.researchContributed / 12) > prevIqMilestone) {
+            h.iq = Math.min(155, h.iq + 1);
+          }
 
           if (Math.random() < dt * 1.1) {
             spawnParticle(world, h.x, h.y - 0.6, '#38bdf8', '+RP', -0.55);
@@ -3302,6 +3597,52 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
         }
       }
     }
+
+    // Stuck-edge detector: if walking outdoors makes almost zero progress for ~1.8s, cleanly reroute instead of jittering
+    const activeWalkTarget =
+      !h.sleepingInBuildingId && h.targetTile
+        ? h.targetTile
+        : null;
+    if (
+      activeWalkTarget &&
+      Math.hypot(activeWalkTarget.x - h.x, activeWalkTarget.y - h.y) > 0.55
+    ) {
+      let tr = stuckTrackers.get(h);
+      if (!tr) {
+        tr = { anchorX: h.x, anchorY: h.y, elapsed: 0 };
+        stuckTrackers.set(h, tr);
+      }
+      if (Math.hypot(h.x - tr.anchorX, h.y - tr.anchorY) >= 0.45) {
+        tr.anchorX = h.x;
+        tr.anchorY = h.y;
+        tr.elapsed = 0;
+      } else {
+        tr.elapsed += dt;
+        if (tr.elapsed >= 1.8) {
+          tr.elapsed = 0;
+          tr.anchorX = h.x;
+          tr.anchorY = h.y;
+          if (h.state === 'SLEEPING' && h.targetBuildingId) {
+            h.targetBuildingId = null;
+            h.targetTile = findOpenTileAround(world, h.x, h.y, 0.8, 2.5, occupiedTiles, h.id, true);
+          } else {
+            if (h.carrying) {
+              world.stockpile[h.carrying.resource] += h.carrying.amount;
+              h.carrying = null;
+            }
+            h.tradeState = null;
+            h.isCuriousExplorer = false;
+            h.targetTile = null;
+            h.targetResourceTile = null;
+            h.targetBuildingId = null;
+            h.actionTimer = 0;
+            h.state = 'IDLE';
+          }
+        }
+      }
+    } else {
+      stuckTrackers.delete(h);
+    }
   }
 
   // Soft personal-space separation so outdoor humans never stack onto the exact same grid cell
@@ -3311,17 +3652,18 @@ export function stepSimulation(world: WorldState, rawDt: number, speed: number):
     for (let j = i + 1; j < world.humans.length; j++) {
       const b = world.humans[j];
       if (b.sleepingInBuildingId) continue;
+      if (a.state === 'SLEEPING' && b.state === 'SLEEPING') continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const dist = Math.hypot(dx, dy);
-      if (dist > 0.001 && dist < 0.62) {
-        const push = ((0.62 - dist) / 0.62) * Math.min(0.14, dt * 1.8);
+      if (dist > 0.001 && dist < 0.56) {
+        const push = ((0.56 - dist) / 0.56) * Math.min(0.08, dt * 1.1);
         const nx = (dx / dist) * push;
         const ny = (dy / dist) * push;
-        const ax = Math.max(1.2, Math.min(world.width - 2.2, a.x - nx));
-        const ay = Math.max(1.2, Math.min(world.height - 2.2, a.y - ny));
-        const bx = Math.max(1.2, Math.min(world.width - 2.2, b.x + nx));
-        const by = Math.max(1.2, Math.min(world.height - 2.2, b.y + ny));
+        const ax = Math.max(1.1, Math.min(world.width - 1.1, a.x - nx));
+        const ay = Math.max(1.1, Math.min(world.height - 1.1, a.y - ny));
+        const bx = Math.max(1.1, Math.min(world.width - 1.1, b.x + nx));
+        const by = Math.max(1.1, Math.min(world.height - 1.1, b.y + ny));
         if (isWalkableOpenTile(world, Math.floor(ax), Math.floor(ay))) {
           a.x = ax;
           a.y = ay;

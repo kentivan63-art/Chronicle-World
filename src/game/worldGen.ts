@@ -79,6 +79,7 @@ export function createHuman(
   const r1 = hash2D(idNum, 1, seed);
   const r2 = hash2D(idNum, 2, seed);
   const r3 = hash2D(idNum, 3, seed);
+  const r4 = hash2D(idNum, 4, seed);
 
   const name = HUMAN_NAMES[(idNum + Math.floor(r1 * 17)) % HUMAN_NAMES.length];
   const skinTone = SKIN_TONES[Math.floor(r2 * SKIN_TONES.length) % SKIN_TONES.length];
@@ -89,6 +90,13 @@ export function createHuman(
     const pool: TalentId[] = ['FORAGER', 'ARCHITECT', 'SCHOLAR', 'METALLURGIST'];
     talents.push(pool[Math.floor(r2 * pool.length) % pool.length]);
   }
+
+  const talentIqBonus =
+    (talents.includes('SCHOLAR') ? 14 : 0) +
+    (talents.includes('CLOCKMAKER') ? 12 : 0) +
+    (talents.includes('CIVIC_LEADER') ? 10 : 0) +
+    (talents.includes('ARCHITECT') ? 8 : 0);
+  const baseIq = Math.min(150, 88 + Math.floor(r4 * 42) + talentIqBonus);
 
   return {
     id: `h_${idNum}`,
@@ -104,6 +112,8 @@ export function createHuman(
     hunger: 15 + Math.floor(r1 * 20),
     energy: 80 + Math.floor(r3 * 20),
     curiosity: 35 + Math.floor(r2 * 45),
+    iq: baseIq,
+    leadershipPoints: talents.includes('CIVIC_LEADER') ? 12 : Math.floor(r3 * 5),
     skinTone,
     tunicColor,
     talents,
@@ -524,6 +534,19 @@ export function generateWorld(preset: MapPreset, seedInput?: number): WorldState
     );
     h.homeBuildingId = coastHut.id;
     humans.push(h);
+  }
+
+  // Designate initial Village Chief per settlement based on IQ, talents & leadership
+  for (const s of settlements) {
+    const members = humans.filter((u) => u.settlementId === s.id);
+    if (members.length > 0) {
+      members.sort(
+        (a, b) =>
+          b.iq + b.talents.length * 18 + b.leadershipPoints * 2 -
+          (a.iq + a.talents.length * 18 + a.leadershipPoints * 2)
+      );
+      s.chiefHumanId = members[0].id;
+    }
   }
 
   const tradeRoutes: TradeRoute[] = [

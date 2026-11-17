@@ -774,12 +774,16 @@ export class WorldRenderer {
       });
     }
 
+    const chiefIds = new Set(
+      world.settlements.map((s) => s.chiefHumanId).filter(Boolean) as string[]
+    );
     const sortedHumans = [...world.humans].sort((a, b) => a.y - b.y);
     for (const h of sortedHumans) {
       if (h.state === 'SLEEPING' && h.sleepingInBuildingId) {
         const b = world.buildings.find((site) => site.id === h.sleepingInBuildingId);
         if (b && b.kind !== 'CAMPFIRE') continue;
       }
+      const isChief = chiefIds.has(h.id);
       drawables.push({
         footY: h.y * BASE_TILE_PX,
         draw: () => {
@@ -789,6 +793,7 @@ export class WorldRenderer {
             world.currentEra,
             camera.zoom,
             h.id === hover.selectedHumanId,
+            isChief,
             animTimeSec
           );
         },
@@ -1312,6 +1317,7 @@ export class WorldRenderer {
     era: EraId,
     zoom: number,
     isSelected: boolean,
+    isChief: boolean,
     animTimeSec: number
   ): void {
     const hx = h.x * BASE_TILE_PX;
@@ -1322,6 +1328,10 @@ export class WorldRenderer {
       ctx.fillRect(Math.round(hx - 2), Math.round(hy - 4), 4, 5);
       ctx.fillStyle = h.skinTone;
       ctx.fillRect(Math.round(hx - 1.5), Math.round(hy - 6.5), 3, 2.5);
+      if (isChief) {
+        ctx.fillStyle = '#fde047';
+        ctx.fillRect(Math.round(hx - 2), Math.round(hy - 8), 4, 1.5);
+      }
       if (isSelected) {
         ctx.strokeStyle = '#fde047';
         ctx.lineWidth = 1;
@@ -1335,6 +1345,12 @@ export class WorldRenderer {
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.ellipse(hx, hy + 1, 5.5, 2.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (isChief) {
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.ellipse(hx, hy + 1, 5.6, 2.1, 0, 0, Math.PI * 2);
       ctx.stroke();
     } else if (h.isCuriousExplorer) {
       ctx.strokeStyle = '#38bdf8';
@@ -1388,6 +1404,16 @@ export class WorldRenderer {
     const baseDrawY = pose === 'sit' ? Math.round(hy - 17) : Math.round(hy - 15.5);
     const drawY = baseDrawY - hopY;
     ctx.drawImage(sprite, drawX, drawY, drawW, drawH);
+
+    if (isChief) {
+      const crownY = pose === 'sit' ? drawY + 2 : drawY;
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(Math.round(hx - 3), crownY + 1, 6, 2);
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(Math.round(hx - 3), crownY, 1.5, 1.5);
+      ctx.fillRect(Math.round(hx - 0.75), crownY - 1, 1.5, 2.5);
+      ctx.fillRect(Math.round(hx + 1.5), crownY, 1.5, 1.5);
+    }
 
     if (h.carrying) {
       const carrySprite =

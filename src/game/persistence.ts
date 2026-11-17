@@ -72,6 +72,9 @@ export function parseWorldSnapshot(raw: string): WorldState | null {
     for (const t of parsed.tiles) {
       if (typeof t.fertility !== 'number') t.fertility = 1.0;
     }
+    for (const s of parsed.settlements) {
+      if (s.chiefHumanId === undefined) s.chiefHumanId = null;
+    }
     const defaultSettlementId = parsed.settlements[0]?.id ?? null;
     for (const h of parsed.humans) {
       if (h.sleepingInBuildingId === undefined) h.sleepingInBuildingId = null;
@@ -81,6 +84,12 @@ export function parseWorldSnapshot(raw: string): WorldState | null {
       if (h.equippedWeapon === undefined) h.equippedWeapon = null;
       if (h.equippedTool === undefined) h.equippedTool = null;
       if (typeof h.craftedCount !== 'number') h.craftedCount = 0;
+      if (typeof h.iq !== 'number') {
+        h.iq = 95 + (h.talents?.length ?? 0) * 10;
+      }
+      if (typeof h.leadershipPoints !== 'number') {
+        h.leadershipPoints = h.talents?.includes('CIVIC_LEADER') ? 12 : 2;
+      }
       if (h.settlementId === undefined) h.settlementId = defaultSettlementId;
       if (h.tradeState === undefined) h.tradeState = null;
       if (!Array.isArray(h.discoveries)) {

@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { ArrowLeftRight, Compass, Pause, Play, Plus, Trash2, X } from 'lucide-react';
+import { ArrowLeftRight, Compass, Crown, Pause, Play, Plus, Trash2, X } from 'lucide-react';
+import { evaluateChiefCandidate } from '../game/simulation';
 import { ResourceType, SettlementBiomeSpecialty, WorldState } from '../game/types';
 
 interface TradeRoutesModalProps {
   world: WorldState;
   onFocusSettlement: (x: number, y: number) => void;
+  onFocusHuman?: (humanId: string) => void;
   onToggleRoute: (routeId: string) => void;
   onCreateRoute: (
     fromSettlementId: string,
@@ -34,6 +36,7 @@ const RESOURCE_OPTIONS: { value: ResourceType; label: string }[] = [
 export const TradeRoutesModal: React.FC<TradeRoutesModalProps> = ({
   world,
   onFocusSettlement,
+  onFocusHuman,
   onToggleRoute,
   onCreateRoute,
   onDeleteRoute,
@@ -88,6 +91,10 @@ export const TradeRoutesModal: React.FC<TradeRoutesModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {world.settlements.map((s) => {
                 const pop = world.humans.filter((h) => h.settlementId === s.id).length;
+                const chief = s.chiefHumanId
+                  ? world.humans.find((h) => h.id === s.chiefHumanId) ?? null
+                  : null;
+                const chiefRank = chief ? evaluateChiefCandidate(chief).total : 0;
                 return (
                   <div
                     key={s.id}
@@ -105,7 +112,22 @@ export const TradeRoutesModal: React.FC<TradeRoutesModalProps> = ({
                       <div className="text-[11px] text-amber-300/90 mt-0.5">
                         {BIOME_LABELS[s.biomeSpecialty]}
                       </div>
-                      <div className="text-[11px] text-slate-400 mt-1.5">
+                      {chief && (
+                        <button
+                          type="button"
+                          onClick={() => onFocusHuman?.(chief.id)}
+                          className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-amber-200 hover:text-amber-100 cursor-pointer"
+                        >
+                          <Crown className="w-3 h-3 text-amber-400 shrink-0" />
+                          <span>
+                            Chief <span className="font-semibold">{chief.name}</span>
+                          </span>
+                          <span className="text-slate-400 font-mono-tabular">
+                            (IQ {chief.iq} · {chiefRank})
+                          </span>
+                        </button>
+                      )}
+                      <div className="text-[11px] text-slate-400 mt-1">
                         Surplus: <span className="text-emerald-300 capitalize">{s.primaryExport}</span> · Need:{' '}
                         <span className="text-sky-300 capitalize">{s.primaryImport}</span>
                       </div>

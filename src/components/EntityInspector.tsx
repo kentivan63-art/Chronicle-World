@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Crosshair, Hammer, Trash2, X } from 'lucide-react';
+import { Crosshair, Crown, Hammer, Trash2, X } from 'lucide-react';
 import {
   BUILDING_DEFS,
   CRAFTED_ITEM_DEFS,
@@ -7,6 +7,7 @@ import {
   TALENT_DEFS,
 } from '../game/constants';
 import { getCraftedItemSprite, getDiscoverySprite } from '../game/pixelSprites';
+import { evaluateChiefCandidate } from '../game/simulation';
 import {
   BuildingSite,
   CraftedItemKind,
@@ -70,7 +71,7 @@ const WEATHER_LABELS: Record<WeatherType, string> = {
   CLEAR: 'Clear Skies',
   RAIN: 'Steady Rain (+Fertility)',
   SNOW: 'Frost & Snow (-Speed, -Fertility)',
-  STORM: 'Thunderstorm (-40% Speed)',
+  STORM: 'Severe Storm (-40% Speed, Seek Shelter)',
 };
 
 function describeResourceTile(tile: WorldTile): {
@@ -188,6 +189,10 @@ export const EntityInspector: React.FC<EntityInspectorProps> = ({
   const humanSettlement = human?.settlementId
     ? settlements.find((s) => s.id === human.settlementId)
     : null;
+  const isVillageChief = Boolean(
+    human && settlements.some((s) => s.chiefHumanId === human.id)
+  );
+  const chiefScore = human ? evaluateChiefCandidate(human) : null;
 
   return (
     <aside className="fixed top-28 right-3 z-20 w-80 max-h-[calc(100vh-180px)] overflow-y-auto bg-[#11161d]/95 border border-white/12 rounded-xl shadow-2xl backdrop-blur-md p-4 text-slate-200">
@@ -196,9 +201,17 @@ export const EntityInspector: React.FC<EntityInspectorProps> = ({
           {/* Header */}
           <div className="flex items-start justify-between gap-2">
             <div>
-              <h2 className="font-display text-lg font-bold text-slate-50 leading-tight">
-                {human.name}
-              </h2>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h2 className="font-display text-lg font-bold text-slate-50 leading-tight">
+                  {human.name}
+                </h2>
+                {isVillageChief && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/50 text-[10px] font-semibold text-amber-300">
+                    <Crown className="w-3 h-3" />
+                    <span>Village Chief</span>
+                  </span>
+                )}
+              </div>
               <div className="text-xs text-slate-400 mt-0.5">
                 Age {human.age} <span aria-hidden="true">·</span> {TASK_LABELS[human.state]}
                 {humanSettlement && (
@@ -285,6 +298,22 @@ export const EntityInspector: React.FC<EntityInspectorProps> = ({
               <span aria-hidden="true">·</span>
               <span>Forged: {human.craftedCount}</span>
             </div>
+
+            {chiefScore && (
+              <div className="mt-1 p-2 rounded-lg bg-[#161e29] border border-white/8 text-[11px] space-y-1">
+                <div className="flex items-center justify-between font-mono-tabular">
+                  <span className="text-slate-300 font-sans font-medium">
+                    IQ <span className="text-sky-300 font-mono-tabular font-semibold">{human.iq}</span>
+                  </span>
+                  <span className="text-amber-300 font-semibold">
+                    Chief Score: {chiefScore.total}
+                  </span>
+                </div>
+                <div className="text-[10px] font-mono-tabular text-slate-400">
+                  Lead {chiefScore.leadership} · Contrib {chiefScore.contribution} · Talents {chiefScore.talents} · IQ {chiefScore.iq}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Equipped Gear */}

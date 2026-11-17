@@ -157,6 +157,7 @@ export interface Settlement {
   centerX: number;
   centerY: number;
   hubBuildingId: string;
+  chiefHumanId?: string | null;
   primaryExport: ResourceType;
   primaryImport: ResourceType;
 }
@@ -272,6 +273,8 @@ export interface HumanAgent {
   hunger: number; // 0 = full, 100 = starving
   energy: number; // 0 = exhausted, 100 = rested
   curiosity: number; // 0-100
+  iq: number; // 85..155 innate & grown intellect
+  leadershipPoints: number; // accumulated civic & caravan leadership
   skinTone: string;
   tunicColor: string;
   talents: TalentId[];

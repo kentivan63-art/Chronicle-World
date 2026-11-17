@@ -753,6 +753,15 @@ export default function App() {
                 setShowTradeRoutes(false);
                 forceHudRefresh();
               }}
+              onFocusHuman={(hid) => {
+                cameraRef.current.followHumanId = hid;
+                if (cameraRef.current.zoom < 3.0) cameraRef.current.zoom = 3.4;
+                setSelectedHumanId(hid);
+                setSelectedBuildingId(null);
+                setSelectedTileCoords(null);
+                setShowTradeRoutes(false);
+                forceHudRefresh();
+              }}
               onToggleRoute={(rid) => {
                 if (toggleTradeRoute(world, rid)) forceHudRefresh();
               }}
